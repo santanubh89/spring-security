@@ -1,0 +1,14 @@
+curl --location 'http://localhost:8100/oauth2/token' \
+--header 'Content-Type: application/x-www-form-urlencoded' \
+--header 'Cookie: JSESSIONID=E54B645BDE3209B5C8F5ECE24AE21AE3' \
+--data-urlencode 'client_id=oidc-client' \
+--data-urlencode 'client_secret=secret' \
+--data-urlencode 'grant_type=client_credentials' \
+--data-urlencode 'scope=openid ADMIN USER'
+
+{
+    "access_token": "eyJraWQiOiIzYzUxODk0Mi03ZTNhLTRiZDgtYWM2OS1mYTUwYzA2YjFlNDkiLCJhbGciOiJSUzI1NiJ9.eyJzdWIiOiJvaWRjLWNsaWVudCIsImF1ZCI6Im9pZGMtY2xpZW50IiwibmJmIjoxNzY0NzY4ODUyLCJzY29wZSI6WyJvcGVuaWQiLCJBRE1JTiIsIlVTRVIiXSwiaXNzIjoiaHR0cDovL2xvY2FsaG9zdDo4MTAwIiwiZXhwIjoxNzY0NzY5MDMyLCJpYXQiOjE3NjQ3Njg4NTIsImp0aSI6IjFiMWY3NGJmLThkZmUtNGVhZC1hMGVkLWZhYjM2NjUwNDFmNCJ9.GU0LdEAK-vAKvTvTGM5Pp811mbakWLXq-KGa_ZQtEXZEdxwAlRtECcEgdYH5i7MtkZINs8I-D-MfVo938jbdm8uqSbrPzgXratJ9wHYqk09sJ6l6OJ9azaEhetutE3i7k9-OqopAw3Vs27DvJqIOSgT3KW_6-LEU2PtSA-jRUg8Bd8HBf1naO63944KiGhOp-O3s2zu7CvM2217daJ4OD7ptudgQzBAnwXNfilJu2vOMYajm2vQgvKa8L3A764Or12o50bCE2X43YQ0wA5BXRJ2f6mLpWyFAyn4mTivf5HN2qm0UlwmYI1ahsyF1bxJskZNu8MfpfieCWAvYVBVFCA",
+    "scope": "openid ADMIN USER",
+    "token_type": "Bearer",
+    "expires_in": 179
+}

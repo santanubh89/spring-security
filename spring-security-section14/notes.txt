@@ -1,0 +1,19 @@
+Client Credentials Grant type flow - Opaque Token
+Edit C:\tools\keycloak-26.4.6\conf\keycloak.conf file to update the DB settings:
+db=postgresql
+db-url=jdbc:postgresql://localhost:5432/spring_security
+db-username=postgres
+db-password=postgres
+
+eazybank-api
+67gTxwTqM9m61UWVSYAFQnborP0AKe6r
+bin\kc.bat start-dev --db postgres --db-url jdbc:postgresql://localhost:5432/spring_security --db-username postgres --db-password postgres
+
+Curl to generate token:
+curl --location 'http://localhost:8080/realms/eazybank-dev/protocol/openid-connect/token' \
+--header 'Content-Type: application/x-www-form-urlencoded' \
+--header 'Cookie: JSESSIONID=0FEBF7574CBC6BAC166B1CEA6A7A6251' \
+--data-urlencode 'grant_type=client_credentials' \
+--data-urlencode 'client_id=eazybank-api' \
+--data-urlencode 'client_secret=67gTxwTqM9m61UWVSYAFQnborP0AKe6r' \
+--data-urlencode 'scope=openid email'

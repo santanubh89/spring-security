@@ -1,0 +1,369 @@
+Section 1: Basic authentication and form login
+When Spring Security dependency is added to the classpath, it automatically enables Form login and Basic authentication.
+
+<dependency>
+	<groupId>org.springframework.boot</groupId>
+	<artifactId>spring-boot-starter-security</artifactId>
+</dependency>
+		
+When an API/page is accessed from browser, the login page will appear and need to enter the configured username and password. If these are not configured, "user" will be the default username and password will be printed in the startup log. Once logged in with this credential, the response will be displayed.
+
+logging.pattern.console=%green(%d{HH:mm:ss.SSS}) %blue(%-5level) %red([%thread]) %yellow(%logger{15}) - %msg%n
+logging.level.org.springframework.security=TRACE
+
+spring.security.user.name=user
+spring.security.user.password=secret
+
+When request is sent from a REST client (or tools like Postman), basic authentication header needs to be sent in the request.
+
+curl --location 'localhost:8080/welcome' \
+--header 'Authorization: Basic dXNlcjpzZWNyZXQ='
+--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+Section 2: API level security and user management
+Configuration classes are defined to configure security for the application. Beans of SecurityFilterChain will be defined, that takes HttpSecurity object as an input. This object can be configured for intended security.
+@Bean
+SecurityFilterChain defaultSecurityFilterChain(HttpSecurity http) throws Exception
+
+authorizeHttpRequests method takes lambdas of requestMatchers and their security settings as input. It is possible to set different level of security for different APIs.
+
+http.authorizeHttpRequests((requests) -> requests
+                .requestMatchers("/myAccount", "/myBalance", "/myLoans", "/myCards").authenticated()
+                .requestMatchers("/notices", "/contact", "/error").permitAll()
+                .anyRequest().denyAll());
+
+Above statement declares that /myAccount, /myBalance etc APIs require authentication; /notices, /contact can be accessed by anyone; any other API will be denied irrespective of being authenticated or not.
+
+In order to allow HTTP POST requests, CSRF has to be disabled.
+http.csrf(csrf -> csrf.disable());
+
+Bean of UserDetailsService will be created to hold allowed user authentication data. UserDetailsService is an interface for which we can use the predefined implementations such as InMemoryUserDetailsManager, JdbcDaoImpl, JdbcUserDetailsManager etc or we can define our own implementation. This has a method loadUserByUsername which will load user from a storage (in memory or database) and the return type of the method is UserDetails, which holds username, password, authorities (collection of GrantedAuthority), and flags like expired, locked, enabled.
+
+@Bean
+public UserDetailsService userDetailsService() {
+	// String password = passwordEncoder().encode("secret");
+	List<UserDetails> users = List.of(
+			User.withUsername("user").password("{bcrypt}$2a$10$X04W4W.7C8IfHEjNRqQWNOcBOtHFUjIY3v0Xnt3.8GTau/d.9x.tO").authorities("read").build(), //bcrypt: secret
+			User.withUsername("admin").password("{noop}12345").authorities("admin").build() // plain text
+	);
+	return new InMemoryUserDetailsManager(users);
+}
+
+PasswordEncoder bean will be defined to encrypt passwords. The prefix defines how a password will be encoded. For example:
+{noop}12345 -> password will be kept in plain text
+{bcrypt}$2a$10$X04W4W.7C8IfHEjNRqQWNOcBOtHFUjIY3v0Xnt3.8GTau/d.9x.tO -> bcrypt encryption
+@Bean
+public PasswordEncoder passwordEncoder() {
+	return PasswordEncoderFactories.createDelegatingPasswordEncoder();
+}
+The encryption is done using a hashing algorithm (such as bcryt, argon etc) and then a salt is added to make the encrypted data non-repeatable for the same data.
+--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+Section 3: Managing users in a database
+There are multiple options - using the Spring provided JdbcUserDetailsManager. In this case tables have to be created as per Spring guideline (users, authorities) and JdbcUserDetailsManager will handle loading the users.
+@Bean
+public UserDetailsService userDetailsService(DataSource dataSource) {
+	return new JdbcUserDetailsManager(dataSource);
+}
+
+Defining own UserDetailsService:
+@Service
+public class CustomerService implements UserDetailsService
+With this it is possible to hold the user data from user managed table and load the data from the same.
+@Override
+public UserDetails loadUserByUsername(String username) throws UsernameNotFoundException {
+	Customer customer = customerRepository.findByEmail(username).orElseThrow(() -> new UsernameNotFoundException("User details not found for the user: " + username));
+	Collection<GrantedAuthority> authorities = Set.of(new SimpleGrantedAuthority(customer.getRole()));
+	return User.withUsername(username).password(customer.getPwd()).authorities(authorities).build();
+}
+--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+Section 4: Authentication Provider
+Custom AuthenticationProvider can be defined by implementating AuthenticationProvider:
+@Override
+public Authentication authenticate(Authentication authentication) throws AuthenticationException {
+	String username = authentication.getName();
+	String password = authentication.getCredentials().toString();
+	UserDetails userDetails = customerService.loadUserByUsername(username);
+	if (passwordEncoder.matches(password, userDetails.getPassword())) {
+		return new UsernamePasswordAuthenticationToken(username, password, userDetails.getAuthorities());
+	}
+	throw new BadCredentialsException("Invalid username or password");
+}
+--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+Section 5: Security Customizations
+Enforcing HTTPS:
+http.requiresChannel(rcc -> rcc.anyRequest().requiresSecure());
+
+Enforcing HTTP:
+http.requiresChannel(rcc -> rcc.anyRequest().requiresInsecure());
+
+Configuring HTTP Basic error behaviour:
+http.httpBasic(hbc -> hbc.authenticationEntryPoint(new CustomBasicAuthenticationEntryPoint()));
+For this AuthenticationEntryPoint needs to be implementated and override commence method.
+public class CustomBasicAuthenticationEntryPoint implements AuthenticationEntryPoint
+This will allow modifying erroneous behaviours and payloads.
+
+Global exception handling:
+http.exceptionHandling(ehc -> ehc.authenticationEntryPoint(new CustomBasicAuthenticationEntryPoint()));
+
+Handling Access denied error:
+http.exceptionHandling(ehc -> ehc.accessDeniedHandler(new CustomAccessDeniedHandler()));
+For this we need to implement AccessDeniedHandler and override handle method:
+public class CustomAccessDeniedHandler implements AccessDeniedHandler
+
+Configuring session behaviour:
+http.sessionManagement(smc -> smc
+	.invalidSessionUrl("/invalid-session") --> Page to be opened in case session is invalid
+	.maximumSessions(1) --> How many parallel sessions aer allowed
+	.maxSessionsPreventsLogin(true) --> Login will be rejected if maximum session count reached
+	.expiredUrl("/expired-url")); --> Page to be opened in case session is expired
+	
+Listening session failure events:
+Define a bean with event listener to act on the failure events
+@EventListener
+public void onFailure(AbstractAuthenticationFailureEvent authenticationFailureEvent)
+--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+Section 6: Form login Customizations
+Login can be customized as below:
+http.formLogin(flc -> flc
+	.usernameParameter("userid") --> Username parameter field in frontend
+	.passwordParameter("secretpwd") --> Password parameter field in frontend
+	.loginPage("/login") --> Login page URL
+	.successHandler(successHandler) --> What happens when login is successful. This is an implementation of AuthenticationSuccessHandler (method: onAuthenticationSuccess)
+	.failureHandler(failureHandler) --> What happens when login is failed. This is an implementation of AuthenticationFailureHandler (method: onAuthenticationFailure)
+	.defaultSuccessUrl("/dashboard") --> Redirection landing page on login success
+	.failureUrl("/login?error=true")); --> Landing page on login failure
+	
+http.logout(loc -> loc
+	.logoutSuccessUrl("/login?logout=true") --> Landing page when logout is successful
+	.invalidateHttpSession(true) --> Removes session
+	.clearAuthentication(true) --> Removes authentication
+	.deleteCookies("JSESSIONID")); --> Delete JSESSIONID cookie
+--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+Section 7: CORS, CSRF, and Role based authorization
+Access based on authority (fine grained permission):
+http.authorizeHttpRequests((requests) -> requests
+	.requestMatchers("/myAccount").hasAuthority("READ::ACCOUNTS")
+	.requestMatchers("/myBalance").hasAnyAuthority("READ::ACCOUNTS", "READ::BALANCE")
+	.requestMatchers("/myLoans").hasAuthority("READ::LOANS")
+	.requestMatchers("/myCards").hasAuthority("READ::CARDS")
+	
+Access based on role (collection of permissions):
+http.authorizeHttpRequests((requests) -> requests
+	.requestMatchers("/myAccount").hasRole("USER")
+	.requestMatchers("/myBalance").hasAnyRole("ADMIN", "USER")
+	.requestMatchers("/myLoans").hasRole("ADMIN")
+	.requestMatchers("/myCards").hasRole("ADMIN")
+For the above code to work, the role should be stored in ROLE_USER, ROLE_ADMIN format.
+
+CORS setup:
+http.cors(corsCustomizer -> corsCustomizer.configurationSource(new CorsConfigurationSource() {
+	@Override
+	public CorsConfiguration getCorsConfiguration(HttpServletRequest request) {
+		CorsConfiguration corsConfiguration = new CorsConfiguration();
+		corsConfiguration.addAllowedOrigin("http://localhost:4200"); --> Where the request will originate from
+		corsConfiguration.addAllowedMethod("*"); --> What methods are allowed
+		corsConfiguration.addAllowedHeader("*"); --> Which headers are allowed
+		corsConfiguration.setAllowCredentials(true);
+		corsConfiguration.setMaxAge(3600L);
+		return corsConfiguration;
+	}
+}));
+		
+CORS is applicable for requests coming from browser based applications deployed in a different domain (protocol/host/port). In case of such requests, a preflight OPTIONS request is sent to validate if CORS is allowed, and the original comes next if allowed.
+
+CSRF = Cross Site Request Forgery
+--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+Section 8: Role based access control from Angular UI
+--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+Section 9: Filters
+Filters can be created as a Bean by implementing either of GenericFilterBean, Filter, or OncePerRequestFilter interfaces.
+doFilter method has to be overridden to perform some activity and then pass the request to the next filter:
+@Override
+public void doFilter(ServletRequest request, ServletResponse response, FilterChain chain) throws IOException, ServletException {
+	log.info("Filter Name: {}", getFilterName());
+	Enumeration<String> initParameterNames = getFilterConfig().getInitParameterNames();
+	while(initParameterNames.hasMoreElements()) {
+		String initParameterName = initParameterNames.nextElement();
+		log.info("Init Parameter: {} : {}", initParameterName, getFilterConfig().getInitParameter(initParameterName));
+
+	};
+	chain.doFilter(request, response);
+}
+
+Filters can be added in the security object as below:
+http
+	.addFilterBefore(new CustomRequestValidationFilter(), BasicAuthenticationFilter.class)
+	.addFilterAfter(new LoggingFilter(), BasicAuthenticationFilter.class);
+--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+Section 10: JWT Token
+JWT tokens are generated after a successful login. An API will accept the username and the password in the request and authenticate the user. If authentication is successful, token can be generated with the username and relevant data using JWTS library. After generation, it will be signed using a secret key.
+String secret = environment.getProperty(JWT_SECRET, JWT_SECRET_DEFAULT);
+SecretKey secretKey = Keys.hmacShaKeyFor(secret.getBytes(StandardCharsets.UTF_8));
+jwt = Jwts.builder()
+		.issuer("EazyBank")
+		.subject("JWTToken")
+		.claim("username", authenticationResult.getName())
+		.claim("authorities", authenticationResult.getAuthorities().stream().map(GrantedAuthority::getAuthority).collect(Collectors.joining(",")))
+		.issuedAt(new java.util.Date())
+		.expiration(new java.util.Date(new java.util.Date().getTime() + 3600 * 1000))
+		.signWith(secretKey)
+		.compact();
+		
+In the subsequent requests, JWT will be passed as the Authorization header in the format Bearer <JWT>. Then the JWT will be parsed in a filter method using the same secret key and username/roles will be extracted from the same. Once the Authentication object is formed, the same will be set in SecurityContextHolder.
+String secret = environment.getProperty(JWT_SECRET, JWT_SECRET_DEFAULT);
+SecretKey secretKey = Keys.hmacShaKeyFor(secret.getBytes(StandardCharsets.UTF_8));
+Claims claims = Jwts.parser().verifyWith(secretKey).build()
+		.parseSignedClaims(jwt).getPayload();
+String username = claims.get("username", String.class);
+String authorities = claims.get("authorities", String.class);
+Authentication authentication = new UsernamePasswordAuthenticationToken(username, null,
+		AuthorityUtils.commaSeparatedStringToAuthorityList(authorities));
+SecurityContextHolder.getContext().setAuthentication(authentication);
+If the JWT is invalid/malformed/expired/signed with a different secret, it will be rejected and HTTP 401 will be thrown.
+--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+Section 11: Method level security
+PreAuthorize - check authorization before executing the method
+@PreAuthorize("hasRole('MANAGER')")
+public String getAccountDetailsPreAuthorized1() {
+	return "OK";
+}
+
+@PreAuthorize("hasAnyRole('USER', 'MANAGER')")
+public String getAccountDetailsPreAuthorized2() {
+	return "OK";
+}
+
+@PreAuthorize("hasAuthority('VIEWACCOUNT')")
+public String getAccountDetailsPreAuthorized3() {
+	return "OK";
+}
+
+@PreAuthorize("#id == authentication.principal")
+public String getAccountDetailsPreAuthorized4(@PathVariable String id, Authentication authentication) {
+	UsernamePasswordAuthenticationToken token = (UsernamePasswordAuthenticationToken) authentication;
+	System.out.println("id: " + authentication.getPrincipal());
+	return "OK";
+}
+
+PostAuthorize - Method executes but validates authorization before returning response.
+@PostAuthorize("returnObject.customerId == #customerId")
+public Accounts getAccountDetailsPostAuthorized1(@PathVariable long customerId) {
+	Accounts a = new Accounts();
+	a.setCustomerId(12345L);
+	log.info("Inside post authorize method");
+	return a;
+}
+
+PreFilter - Only passed the elements of a collection that matches the given criteria
+@PreFilter("filterObject.accountType == 'Savings'")
+public List<Accounts> saveAccountsPreFilter(@RequestBody List<Accounts> accountsList) {
+	Accounts a = accountsList.getFirst();
+	if (null != a) {
+		a.setBranchAddress("Spring Boot");
+		a.setCreateDt(new Date(System.currentTimeMillis()));
+	}
+	log.info("Inside pre filter method: {}", accountsList);
+	return accountsList;
+}
+
+PostFilter - Only returns the elements of a collection that matches the given criteria
+@PostFilter("filterObject.accountType == 'Savings'")
+public List<Accounts> saveAccountsPostFilter(@RequestBody List<Accounts> accountsList) {
+	log.info("Inside post filter method: {}", accountsList);
+	List<Accounts> returnList = new ArrayList<>(accountsList);
+	return returnList;
+}
+--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+Section 12: OIDC with Github
+Step 1: Registration with GitHub (Profile - Settings - Developer settings - OAuth Apps - New OAuth app
+Application name = spring-security-app
+Homepage URL = http://localhost:8080
+Authorization callback URL = http://localhost:8080
+This will return a client ID and client secret can be generated.
+
+Step 2: Application side
+A Bean needs to be defined:
+@Bean
+public ClientRegistrationRepository clientRegistrationRepository() {
+	ClientRegistration githubClientRegistration = githubClientRegistration();
+	return new InMemoryClientRegistrationRepository(githubClientRegistration);
+}
+private ClientRegistration githubClientRegistration() {
+	return CommonOAuth2Provider.GITHUB.getBuilder("github")
+			.clientId("***").clientSecret("***").build();
+}
+This will add GitHub OIDC in the login page.
+
+The ClientRegistration object requires the name of the OIDC provider, client ID, and secret as generated in GitHub developer settings.
+The token can be obtained by using the following method:
+Get code by hitting the following URL in browser
+https://github.com/login/oauth/authorize?client_id=***&scope=read:user
+
+Token Request:
+curl --location 'https://github.com/login/oauth/access_token' \
+--header 'Accept: application/json' \
+--header 'Content-Type: application/x-www-form-urlencoded' \
+--header 'Cookie: _octo=GH1.1.1220835926.1764245782' \
+--data-urlencode 'client_id=***' \
+--data-urlencode 'client_secret=***' \
+--data-urlencode 'code=***'
+
+Response:
+{
+    "access_token": "***",
+    "token_type": "bearer",
+    "scope": "read:user"
+}
+--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+Section 13: Spring Boot Resource Server with KeyCloak Authorization Server (OIDC):
+Changes in the KeyCloak side:
+Client Credentials Grant type flow - JWT token
+Edit C:\tools\keycloak-26.4.6\conf\keycloak.conf file to update the DB settings:
+db=postgresql
+db-url=jdbc:postgresql://localhost:5432/spring_security
+db-username=postgres
+db-password=postgres
+
+eazybank-api
+67gTxwTqM9m61UWVSYAFQnborP0AKe6r
+bin\kc.bat start-dev --db postgres --db-url jdbc:postgresql://localhost:5432/spring_security --db-username postgres --db-password postgres
+
+Curl to generate token:
+curl --location 'http://localhost:8080/realms/eazybank-dev/protocol/openid-connect/token' \
+--header 'Content-Type: application/x-www-form-urlencoded' \
+--header 'Cookie: JSESSIONID=0FEBF7574CBC6BAC166B1CEA6A7A6251' \
+--data-urlencode 'grant_type=client_credentials' \
+--data-urlencode 'client_id=eazybank-api' \
+--data-urlencode 'client_secret=67gTxwTqM9m61UWVSYAFQnborP0AKe6r' \
+--data-urlencode 'scope=openid email'
+
+Application changes:
+Configuration parameter to be added:
+spring.security.oauth2.resourceserver.jwt.jwk-set-uri=http://localhost:8080/realms/eazybank-dev/protocol/openid-connect/certs
+This tells the application to download JWKS certificates from this URL while starting the applications. When the resource server receives a request, it will validate the JWT using these certificates and parse the JWT. The request will then be executed if JWT is valid.
+
+Resource server configuration to read roles from JWT - Authority converter to be defined:
+JwtAuthenticationConverter jwtAuthenticationConverter = new JwtAuthenticationConverter();
+jwtAuthenticationConverter.setJwtGrantedAuthoritiesConverter(new KeycloakRoleConverter());
+http.oauth2ResourceServer(rsc -> rsc.jwt(jwtConfigurer -> jwtConfigurer.jwtAuthenticationConverter(jwtAuthenticationConverter)));
+--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+Section 14: Opaque token
+JWT tokens are called Self contained token - as JWT contains sufficient information within itself
+Opaque token are random string which does not carry any information. Hence it is not possible to validate opaque token using JWKS - rather resource server needs to reach out to the authorization server to validate the token. In order to do this, authorization servers expose a introspection endpoint that can confirm if the token is valid. This leads to performance issue as Resource server needs to reach Authorization server for each and every requests.
+This can be configured as followed:
+http.oauth2ResourceServer(rsc -> rsc.opaqueToken(
+	opaqueTokenConfigurer -> opaqueTokenConfigurer
+	.authenticationConverter(new KeycloakOpaqueRoleConverter())
+	.introspectionUri(this.introspectionUri)
+	.introspectionClientCredentials(this.clientId, this.clientSecret)));
+
+spring.security.oauth2.resourceserver.opaquetoken.introspection-uri=http://localhost:8080/realms/eazybank-dev/protocol/openid-connect/token/introspect
+spring.security.oauth2.resourceserver.opaquetoken.client-id=eazybank-introspection-client
+spring.security.oauth2.resourceserver.opaquetoken.client-secret=lfU7zfCKsbnpESXTlmhqsTt0mJA5lxeQ
+--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+Section 15: Spring Authorization Server
+For this, code provided in Spring documentation page needs to be followed.
+Bean of RegisteredClientRepository (implementation - InMemoryRegisteredClientRepository) needs to be created. This bean will contain a list of client applications that can use this Authorization server. The grant types can be CLIENT_CREDENTIALS (for API to API communication), introspection client for Opaque token, AUTHORIZATION_CODE for OIDC, AUTHORIZATION_CODE for PKCE. Also need to define beans for JWKSource, JwtDecoder, OAuth2TokenCustomizer.
+
+On the Resource Server side, Oauth2 resource server needs to be configured:
+http.oauth2ResourceServer(rsc -> rsc.jwt(jwtConfigurer -> jwtConfigurer.jwtAuthenticationConverter(jwtAuthenticationConverter)));
+spring.security.oauth2.resourceserver.jwt.jwk-set-uri=http://localhost:8100/oauth2/jwks
